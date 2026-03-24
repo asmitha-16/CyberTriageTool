@@ -1,0 +1,58 @@
+<!-- templates/upload.html -->
+
+{% extends "base.html" %}
+{% block title %}Upload Evidence{% endblock %}
+
+{% block content %}
+<style>
+  .page-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+</style>
+
+<div class="page-center">
+  <div class="col-md-6">
+    <div class="hero text-center mb-4">
+      <h1 class="mb-1">Upload Evidence</h1>
+      <div class="small text-white">
+        Upload a single file or ZIP. The system will extract timeline files & run analysis hooks.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <form id="uploadForm" method="POST" action="/upload" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label">Case ID</label>
+            <input type="text" name="case_id" class="form-control" placeholder="case001"
+              value="{{ request.args.get('case_id','case001') }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Uploader</label>
+            <input type="text" name="uploader" class="form-control" placeholder="investigator"
+              value="{{ request.args.get('uploader','Investigator') }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">File</label>
+            <input type="file" name="file" id="fileInput" class="form-control">
+          </div>
+
+          <div class="text-center">
+            <button id="uploadBtn" type="submit" class="btn btn-primary mt-2">
+              Upload & Process
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="uploadStatus" class="text-center mt-3"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+{% endblock %}

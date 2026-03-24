@@ -1,0 +1,1170 @@
+<!-- templates/dashboard.html -->
+{% extends "base.html" %}
+{% block title %}Dashboard — {{ case_id }}{% endblock %}
+
+{% block content %}
+<div class="hero mb-4">
+  <div class="d-flex justify-content-between align-items-start">
+    <div>
+      <h1 class="mb-1"><span class="accent">Case</span> <small class="text-white">—</small> <small class="muted">{{ case_id }}</small></h1>
+      <p class="lead">Merged evidence view · explainable scoring · tamper-proof audits</p>
+    </div>
+
+    <div class="text-end">
+  <div id="timeline-artifact-badge" class="mb-2"></div>
+
+  <!-- 👇 Add this block -->
+  <div class="mt-2">
+    <span class="me-2 text-muted small">
+      Logged in as {{ session.get('user') }}
+    </span>
+    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger">
+      Logout
+    </a>
+  </div>
+</div>
+
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <!-- LEFT COLUMN: Case switcher + Artifacts + Suspicion score -->
+  <div class="col-md-4">
+    <div class="d-flex flex-column gap-3 h-100">
+      
+      <!-- Case Switcher -->
+      <div class="card">
+        <div class="card-body">
+          <form id="case-switcher-form" class="mb-2" method="get" action="{{ url_for('dashboard') }}">
+            <div class="input-group">
+              <select id="case-switcher" name="case_id" class="form-select" onchange="document.getElementById('case-switcher-form').submit();">
+                {% if cases %}
+                  {% for c in cases %}
+                    <option value="{{ c.case_id }}" {% if c.case_id == case_id %}selected{% endif %}>{{ c.case_id }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option value="{{ case_id }}" selected>{{ case_id }}</option>
+                {% endif %}
+              </select>
+              <button class="btn btn-outline-secondary" type="submit">Go</button>
+            </div>
+          </form>
+          <div class="d-flex gap-2" style = "margin-top: 20px;">
+            <a href="{{ url_for('view_case_coc', case_id=case_id) }}" class="btn btn-outline-warning">Case CoC</a>
+            <a class="btn btn-outline-secondary" href="{{ url_for('report') }}?case_id={{ case_id }}">Report Preview</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Artifact Count -->
+      <div class="card">
+        <div class="card-body">
+          <h6 class="card-subtitle mb-2" style="color: #e6e6e6;">Artifacts</h6>
+          <h3 class="mb-0" style="color: #d7dbd9;">{{ artifact_count }}</h3>
+        </div>
+      </div>
+
+      <!-- Suspicion Score -->
+      <div class="card flex-fill" style="border-left:4px solid var(--accent);">
+        <div class="card-body">
+          <h6 class="card-subtitle" style="color: #00ff88;">Suspicion Score (case)</h6>
+
+          {% set ns = namespace(scores=[]) %}
+          {% for art in artifacts %}
+            {% set analysis = art.analysis if art.analysis is not none else (art.get('analysis') if art.get is defined else None) %}
+            {% if analysis and analysis is mapping %}
+              {% set fs = analysis.get('final_score') or analysis.get('suspicion_score') or (analysis.get('heuristics') and analysis.get('heuristics', {}).get('suspicion_score')) %}
+              {% if fs is not none %}
+                {% set ns.scores = ns.scores + [fs] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+
+          {% if ns.scores %}
+            {% set case_score = ns.scores|max %}
+            <div class="d-flex align-items-center mt-2">
+              <span class="badge {% if case_score >= 70 %}bg-danger{% elif case_score > 30 %}bg-warning text-dark{% else %}bg-success{% endif %}" style="font-size:1.05rem;padding:0.5rem 0.7rem;">{{ case_score }}%</span>
+              <div class="ms-3" style="color: #b7b8b7;">Case score = max(artifact scores)</div>
+            </div>
+          {% else %}
+            <h3><span class="text-muted">—</span></h3>
+          {% endif %}
+
+          {% set active_weights = None %}
+          {% for art in artifacts %}
+            {% set a_analysis = art.analysis if art.analysis is not none else (art.get('analysis') if art.get is defined else None) %}
+            {% if not active_weights and a_analysis and a_analysis is mapping and a_analysis.get('weights') %}
+              {% set active_weights = a_analysis.get('weights') %}
+            {% endif %}
+          {% endfor %}
+          {% if not active_weights %}
+            {% set active_weights = {'ioc': 0.40, 'yara': 0.30, 'heuristics': 0.30} %}
+          {% endif %}
+
+          <div class="mt-3 small">
+            <strong>Weights</strong>
+            <div class="d-flex gap-2 mt-1">
+              <span class="badge bg-secondary">IOC {{ (active_weights.ioc * 100)|round(0) }}%</span>
+              <span class="badge bg-secondary">YARA {{ (active_weights.yara * 100)|round(0) }}%</span>
+              <span class="badge bg-secondary">Heuristics {{ (active_weights.heuristics * 100)|round(0) }}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN: Chart -->
+  <div class="col-md-8">
+    <div class="card h-100">
+      <div class="card-body d-flex flex-column">
+        <h6 class="card-subtitle mb-3" style="color:#00ff88;">Component Comparison (IOC / YARA / Heuristics)</h6>
+        <div style="flex:1 1 auto; min-height:380px;">
+          <canvas id="componentChart" style="width:100%; height:100%;"></canvas>
+        </div>
+        <div class="mt-2 small text-muted">
+          <em>Hover a point to see the full filename and per-component value.</em>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h5 class="mt-3"  style="color: #ebe8e8;">Artifacts list</h5>
+
+{% if artifacts and artifacts|length > 0 %}
+  <div class="table-responsive">
+    <table class="table table-striped table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Artifact ID</th>
+          <th>Filename</th>
+          <th>Uploaded By</th>
+          <th>Uploaded At (IST)</th>
+          <th>Size (bytes)</th>
+          <th>Analysis & Explainability</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in artifacts %}
+          {% set aid = a.artifact_id %}
+          <tr id="row-{{ aid }}" data-artifact-id="{{ aid }}">
+            <td class="artifact-id-cell" style="font-family:monospace; word-break:break-all; white-space:normal;">
+              {{ aid }}
+              {% set is_dup = (a.is_duplicate if a is mapping else (a.get('is_duplicate') if a.get is defined else False)) %}
+              {% set dup_of = (a.duplicate_of if a is mapping else (a.get('duplicate_of') if a.get is defined else None)) %}
+              {% if is_dup or dup_of %}
+                <span class="badge bg-secondary ms-2" data-bs-toggle="tooltip" title="Duplicate of {{ dup_of if dup_of else 'unknown' }}">Duplicate</span>
+                {% if dup_of %}
+                  <a href="{{ url_for('api_manifest', case_id=case_id) }}#{{ dup_of }}" class="ms-1 small text-decoration-none" data-bs-toggle="tooltip" title="Jump to original artifact {{ dup_of }}">↪ Original</a>
+                {% endif %}
+              {% endif %}
+              <div class="mt-1 small"><span class="meta-status" id="meta-status-{{ aid }}"></span></div>
+            </td>
+
+            <td>{{ a.original_filename }}</td>
+            <td>{{ a.uploaded_by }}</td>
+            <td class="uploaded-at text-muted small" style="white-space: normal; word-break: break-word; overflow-wrap: anywhere;">
+              {{ a.uploaded_at | ist_time }}
+            </td>
+            <td>{{ a.size_bytes }}</td>
+
+            <td>
+              {% set analysis = a.analysis if a.analysis is not none else (a.get('analysis') if a.get is defined else None) %}
+              {% if analysis and analysis is mapping %}
+                {% set final = analysis.get('final_score') or analysis.get('suspicion_score') or (analysis.get('heuristics') and analysis.get('heuristics', {}).get('suspicion_score')) %}
+                {% set final_int = final|default(0)|int %}
+                <div class="mb-1 d-flex align-items-center">
+                  <div class="me-2">
+                    <span class="badge {% if final_int >= 70 %}bg-danger{% elif final_int > 30 %}bg-warning text-dark{% else %}bg-success{% endif %}">{{ final_int }}%</span>
+                  </div>
+                  <div class="flex-fill">
+                    <div class="progress" style="height:8px;">
+                      {% if final_int >= 70 %}
+                        <div class="progress-bar bg-danger" role="progressbar" data-width="{{ final_int }}" style="width: 0%;"></div>
+                      {% elif final_int > 30 %}
+                        <div class="progress-bar bg-warning" role="progressbar" data-width="{{ final_int }}" style="width: 0%;"></div>
+                      {% else %}
+                        <div class="progress-bar bg-success" role="progressbar" data-width="{{ final_int }}" style="width: 0%;"></div>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+
+                {# compact blob for Why modal #}
+                {% set _ns = namespace(iocs=[], yaras=[]) %}
+                {% for m in (analysis.get('ioc_matches') or []) %}
+                  {% if m is mapping %}
+                    {% set _mi = {
+                      "type": (m.get('type') if m.get('type') is defined else 'ioc'),
+                      "value": (m.get('value') if m.get('value') is defined else (m.get('ioc') if m.get('ioc') is defined else '')),
+                      "confidence": (m.get('confidence') if m.get('confidence') is defined else None),
+                      "tags": (m.get('tags') if m.get('tags') is defined else [])
+                    } %}
+                  {% else %}
+                    {% set _mi = {"type": "ioc", "value": (m|string), "confidence": None, "tags": []} %}
+                  {% endif %}
+                  {% set _ns.iocs = _ns.iocs + [_mi] %}
+                {% endfor %}
+
+                {% for y in (analysis.get('yara_matches') or []) %}
+                  {% if y is mapping %}
+                    {% set _yi = {
+                      "rule": (y.get('rule') if y.get('rule') is defined else (y.get('name') if y.get('name') is defined else '<unnamed>')),
+                      "tags": (y.get('tags') if y.get('tags') is defined else []),
+                      "meta": (y.get('meta') if y.get('meta') is defined else {})
+                    } %}
+                  {% else %}
+                    {% set _yi = {"rule": (y|string), "tags": [], "meta": {}} %}
+                  {% endif %}
+                  {% set _ns.yaras = _ns.yaras + [_yi] %}
+                {% endfor %}
+
+                {% set compact_blob = {
+                    "artifact_id": aid,
+                    "final_score": final_int,
+                    "weights": analysis.get('weights') or active_weights,
+                    "breakdown": analysis.get('breakdown') or analysis.get('final_breakdown') or analysis.get('components', {}),
+                    "reasons": analysis.get('reasons') or analysis.get('final_reasons') or [],
+                    "ioc_matches": _ns.iocs,
+                    "yara_matches": _ns.yaras,
+                    "heuristics": analysis.get('heuristics') or {}
+                  } %}
+                
+                <ul class="analysis-list mb-2">
+  {% if ioc_matches and ioc_matches|length > 0 %}
+    <li><span class="badge bg-warning text-dark">IOC</span> — {{ ioc_matches|length }} matches</li>
+  {% endif %}
+  {% if yara_matches and yara_matches|length > 0 %}
+    <li><span class="badge bg-danger">YARA</span> — {{ yara_matches|length }} matches</li>
+  {% endif %}
+  {% if heur %}
+    <li><span class="badge bg-info">Heuristics</span> — Score {{ heur.get('suspicion_score', 'N/A') }}</li>
+  {% endif %}
+  {% if compact_blob.reasons and compact_blob.reasons|length > 0 %}
+    <li>
+      <strong>Top reasons:</strong>
+      <ul class="small mt-1">
+        {% for reason in compact_blob.reasons[:3] %}
+          <li>{{ reason }}</li>
+        {% endfor %}
+        {% if compact_blob.reasons|length > 3 %}
+          <li class="text-muted">… and {{ compact_blob.reasons|length - 3 }} more</li>
+        {% endif %}
+      </ul>
+    </li>
+  {% endif %}
+</ul>
+
+                <div class="d-inline-block ms-2">
+                  <button class="btn btn-sm btn-outline-primary why-btn"
+                          type="button"
+                          data-artifact="{{ aid }}"
+                          data-analysis='{{ compact_blob|tojson|e }}'
+                          data-bs-toggle="modal"
+                          data-bs-target="#whyModal">
+                    Why?
+                  </button>
+                </div>
+
+              {% else %}
+                <span class="text-muted">Pending analysis</span>
+              {% endif %}
+            </td>
+
+<td class="action-cell">
+  <div class="action-buttons">
+    <button type="button"
+            class="btn btn-sm btn-action btn-verify verify-btn"
+            data-case="{{ case_id|e }}"
+            data-art="{{ aid|e }}">
+      ✅ Verify
+    </button>
+
+    <button type="button"
+            class="btn btn-sm btn-action btn-coc coc-btn"
+            data-case="{{ case_id|e }}"
+            data-art="{{ aid|e }}">
+      📜 CoC
+    </button>
+  </div>
+</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+{% else %}
+  <div class="alert alert-secondary">No artifacts found for this case. Upload one from the <a href="{{ url_for('home') }}">Upload page</a>.</div>
+{% endif %}
+
+{# Why modal (shared) #}
+<div class="modal fade" id="whyModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Why this score?</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body pb-3">
+        <div id="why-header" class="mb-3 d-flex align-items-center">
+          <h3 id="why-score" class="me-3" style="margin:0"></h3>
+          <div id="why-badge"></div>
+          <div class="ms-auto small text-muted" id="why-artifact-id"></div>
+        </div>
+
+        <div id="why-breakdown" class="mb-3"></div>
+        <div id="why-details" class="mb-2"></div>
+
+        <hr/>
+        <div>
+          <h6>Summary reasons</h6>
+          <ul id="why-reasons" class="small"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# === Chain of Custody Modal === #}
+<div class="modal fade" id="cocModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Chain of Custody</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="cocModalBody" class="small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-white" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.table thead th {
+  background-color: rgba(255,255,255,0.08);
+  color: #00ffcc;
+  font-weight: 600;
+  text-align: left;           
+  vertical-align: middle;
+  border-bottom: 2px solid rgba(255,255,255,0.15);
+  border-right: 1px solid rgba(255,255,255,0.08);
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
+.table tbody td {
+  border-right: 1px solid rgba(255,255,255,0.06);
+  vertical-align: middle;
+  text-align: left;
+  padding: 8px 12px;
+}
+
+.table thead th:last-child,
+.table tbody td:last-child {
+  border-right: none;
+}
+
+.table tbody tr {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.table-striped tbody tr:nth-of-type(odd) {
+  background-color: rgba(255,255,255,0.02);
+}
+.table-striped tbody tr:nth-of-type(even) {
+  background-color: rgba(255,255,255,0.04);
+}
+
+.table tbody tr:hover {
+  background-color: rgba(0,255,136,0.08);
+}
+
+.table tbody td.small,
+.table tbody td .small {
+  font-size: 0.85rem;
+}
+
+.table td:nth-child(1) { width: 16%; }   /* Artifact ID */
+.table td:nth-child(2) { width: 18%; }   /* Filename */
+.table td:nth-child(3) { width: 10%; }   /* Uploaded By */
+.table td:nth-child(4) { width: 16%; }   /* Uploaded At */
+.table td:nth-child(5) { width: 10%; }   /* Size */
+.table td:nth-child(6) { width: 20%; }   /* Analysis */
+.table td:nth-child(7) { width: 10%; }   /* Actions */
+</style>
+
+<style>
+  .verify-ok { color: var(--accent); font-weight: 600; }
+  .verify-bad { color: #e67e22; font-weight: 600; }
+  .coc-list ul { margin: 0 0 0 18px; padding: 0; }
+  .coc-list li { margin: 6px 0; }
+</style>
+
+<style>
+  .artifact-id-cell {
+    max-width: 280px;
+    white-space: normal;   
+    word-break: break-all; 
+    overflow-wrap: anywhere;  
+  }
+</style>
+
+<style>
+  .uploaded-at {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    white-space: nowrap; 
+  }
+</style>
+
+<style>
+  .uploaded-at {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: #ccc;
+    white-space: normal; 
+    word-break: break-word;
+    overflow-wrap: anywhere; 
+    max-width: 220px;          
+  }
+</style>
+
+<style>
+  .analysis-list {
+    list-style-type: disc;
+    padding-left: 20px;
+    margin: 0;
+    color: var(--bs-body-color);
+    font-size: 0.9rem;
+  }
+
+  .analysis-list li {
+    margin-bottom: 4px;
+    line-height: 1.4;
+  }
+
+  .analysis-list .badge {
+    min-width: 60px;
+    font-size: 0.75rem;
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  .analysis-list strong {
+    color: var(--bs-body-color);
+  }
+
+  .analysis-list ul {
+    list-style-type: circle;
+    padding-left: 18px;
+    margin-top: 4px;
+    color: var(--bs-secondary-color);
+  }
+</style>
+
+<style>
+  .action-cell {
+    min-width: 180px;
+    text-align: center;
+    vertical-align: top;
+  }
+
+  .action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .btn-action {
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    font-weight: 500;
+    transition: all 0.2s ease-in-out;
+    background-color: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    box-shadow: 0 0 4px rgba(0,0,0,0.1);
+  }
+
+  .btn-ioc {
+    border-color: rgba(13,110,253,0.4);
+    color: var(--bs-info);
+  }
+  .btn-yara {
+    border-color: rgba(220,53,69,0.4);
+    color: var(--bs-danger);
+  }
+
+  .btn-verify {
+    border-color: rgba(25,135,84,0.5);
+    color: var(--bs-success);
+  }
+  .btn-coc {
+    border-color: rgba(108,117,125,0.4);
+    color: var(--bs-secondary);
+  }
+
+  .btn-action:hover, .btn-action:focus {
+    background-color: var(--bs-tertiary-bg);
+    box-shadow: 0 0 8px rgba(13,110,253,0.3);
+    transform: translateY(-1px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .btn-action:hover, .btn-action:focus {
+      box-shadow: 0 0 8px rgba(255,255,255,0.1);
+    }
+  }
+</style>
+
+<style>
+.verify-inline-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.85rem;
+  transition: opacity 0.8s ease;
+}
+</style>
+
+<style>
+.coc-list-group {
+  overflow-y: auto;
+  border-radius: 10px;
+}
+
+.coc-list-group .list-group-item {
+  background-color: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 10px;
+  border-left: 6px solid transparent;
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #f1f1f1;
+  transition: all 0.2s ease-in-out;
+}
+
+.coc-list-group .list-group-item strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.coc-list-group .list-group-item:hover {
+  background-color: rgba(255,255,255,0.08);
+  transform: translateY(-2px);
+}
+
+.coc-action-upload { border-left-color: #4da3ff; }   /* light blue */
+.coc-action-verify { border-left-color: #4cffb0; }   /* mint green */
+.coc-action-tamper { border-left-color: #ff6b6b; }   /* red */
+.coc-action-extract { border-left-color: #ffb84d; }  /* orange */
+.coc-action-generic { border-left-color: #a0a0a0; }  /* grey */
+
+.coc-list-group code {
+  color: #00ffcc;
+  background: rgba(0,255,204,0.1);
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+}
+
+.coc-icon {
+  font-size: 1.2rem;
+  margin-right: 6px;
+}
+
+.coc-header {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.coc-subtext {
+  color: #bbb;
+  font-size: 0.85rem;
+}
+</style>
+
+<style>
+.timeline {
+  border-left: 2px solid var(--bs-secondary);
+  margin-left: 1rem;
+  padding-left: 1rem;
+}
+.timeline-entry {
+  position: relative;
+}
+.timeline-entry::before {
+  content: '';
+  position: absolute;
+  left: -1.1rem;
+  top: 0.6rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--bs-primary);
+}
+.timeline-entry:hover {
+  background-color: rgba(255,255,255,0.05);
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+
+const TRIAGE_ARTIFACTS = {{ artifacts | tojson | safe }};
+
+  function safeParseAnalysis(a){
+    if(!a) return {};
+    if(typeof a === 'string'){
+      try { return JSON.parse(a); } catch(e){ return {}; }
+    }
+    if(typeof a === 'object') return a;
+    return {};
+  }
+
+  function shortLabel(name, maxLen){
+    maxLen = maxLen || 18;
+    if(!name) return '';
+    if(name.length <= maxLen) return name;
+    return name.slice(0, maxLen-2) + '…';
+  }
+
+  (function renderInlineScoreChart(){
+    const el = document.getElementById('inlineScoreChart');
+    if(!el) return;
+
+    const artifacts = TRIAGE_ARTIFACTS;
+    const labels = [];
+    const data = [];
+
+    artifacts.forEach(a => {
+      try {
+        const label = (a.saved_filename || a.original_filename || a.artifact_id || '').toString();
+        labels.push(shortLabel(label, 16));
+        let analysis = a.analysis || (typeof a.get === 'function' ? a.get('analysis') : null) || {};
+        analysis = safeParseAnalysis(analysis);
+        let final = analysis.final_score || analysis.suspicion_score || (analysis.heuristics && analysis.heuristics.suspicion_score) || 0;
+        final = (final === null || final === undefined) ? 0 : parseInt(final) || 0;
+        data.push(final);
+      } catch(e){
+        labels.push(a.artifact_id || 'unknown');
+        data.push(0);
+      }
+    });
+
+    const cfg = {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Final score',
+          data: data,
+          fill: true,
+          tension: 0.25,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          borderWidth: 2,
+          borderColor: '#00ff88',
+          backgroundColor: 'rgba(0,255,136,0.06)',
+          pointBackgroundColor: '#002b12',
+          pointBorderColor: '#00ff88',
+          pointStyle: 'rectRounded'
+        }]
+      },
+      options: {
+        elements: { line: { borderJoinStyle: 'round' } },
+        animation: { duration: 400 },
+        maintainAspectRatio: false,
+        responsive: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#111',
+            titleColor: '#00ff88',
+            bodyColor: '#fff',
+            callbacks: {
+              title: function(tooltipItems){
+                const i = tooltipItems[0].dataIndex;
+                return 'Artifact: ' + (labels[i] || 'unknown');
+              },
+              label: function(item){
+                return item.dataset.label + ': ' + (item.parsed.y) + '%';
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#9aa0a6', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+            grid: { color: 'rgba(255,255,255,0.03)' },
+            title: { display: true, text: 'Artifacts (short name)', color: '#9aa0a6' }
+          },
+          y: {
+            min: 0,
+            max: 100,
+            ticks: { color: '#9aa0a6' },
+            grid: { color: 'rgba(255,255,255,0.03)' },
+            title: { display: true, text: 'Score (%)', color: '#9aa0a6' }
+          }
+        }
+      }
+    };
+
+    try { if(window._inlineScoreChart instanceof Chart) window._inlineScoreChart.destroy(); } catch(e){}
+    try { window._inlineScoreChart = new Chart(el.getContext('2d'), cfg); } catch(e){ console.warn('inlineScoreChart init failed', e); }
+  })();
+
+  // ---- Component Comparison Chart (IOC / YARA / Heuristics) -------------
+  (function renderComponentChart(){
+    const el = document.getElementById('componentChart');
+    if(!el) return;
+
+    const artifacts = TRIAGE_ARTIFACTS;
+    const labels = [];
+    const iocData = [];
+    const yaraData = [];
+    const heurData = [];
+
+    function safeNum(v){
+      if(v === null || v === undefined) return 0;
+      if(typeof v === 'string'){
+        v = v.trim().replace('%','');
+      }
+      const n = parseFloat(v);
+      return (isNaN(n) ? 0 : Math.max(0, Math.min(100, n)));
+    }
+
+    function pickComponent(obj, paths){
+      for(const p of paths){
+        const parts = p.split('.');
+        let cur = obj;
+        let ok = true;
+        for(const part of parts){
+          if(cur && (part in cur)){
+            cur = cur[part];
+          } else { ok = false; break; }
+        }
+        if(ok && (cur !== null && cur !== undefined)) return cur;
+      }
+      return null;
+    }
+
+    artifacts.forEach(a => {
+      try {
+        const filename = (a.original_filename || a.saved_filename || a.artifact_id || '').toString();
+        labels.push(filename);
+
+        let analysis = a.analysis || (typeof a.get === 'function' ? a.get('analysis') : null) || {};
+        if(typeof analysis === 'string'){
+          try { analysis = JSON.parse(analysis); } catch(e){ analysis = {}; }
+        }
+
+        const iocRaw = pickComponent(analysis, [
+          'components.ioc.score',
+          'components.ioc',
+          'breakdown.ioc_component',
+          'ioc_component',
+          'ioc_score',
+          'analysis.components.ioc.score',
+          'analysis.breakdown.ioc_component'
+        ]);
+
+        const yaraRaw = pickComponent(analysis, [
+          'components.yara.score',
+          'components.yara',
+          'breakdown.yara_component',
+          'yara_component',
+          'yara_score'
+        ]);
+
+        const heurRaw = pickComponent(analysis, [
+          'components.heuristics.score',
+          'components.heuristics',
+          'breakdown.heuristics_component',
+          'heuristics_component',
+          'heuristics.score',
+          'heuristics.suspicion_score'
+        ]);
+
+        const iocMatches = (analysis.ioc_matches || analysis.iocs || analysis.ioc || []);
+        const yaraMatches = (analysis.yara_matches || analysis.yaras || analysis.yara || []);
+
+        let iocVal = safeNum(iocRaw);
+        let yaraVal = safeNum(yaraRaw);
+        let heurVal = safeNum(heurRaw);
+
+        if(iocVal === 0 && Array.isArray(iocMatches) && iocMatches.length > 0){
+          iocVal = Math.min(70, 8 + iocMatches.length * 14);
+        }
+        if(yaraVal === 0 && Array.isArray(yaraMatches) && yaraMatches.length > 0){
+          yaraVal = Math.min(90, 12 + yaraMatches.length * 18);
+        }
+
+        iocData.push(iocVal);
+        yaraData.push(yaraVal);
+        heurData.push(heurVal);
+
+      } catch(err){
+        console.warn('componentChart: error parsing artifact', a && (a.artifact_id || a.original_filename), err);
+        labels.push(a.artifact_id || 'unknown');
+        iocData.push(0); yaraData.push(0); heurData.push(0);
+      }
+    });
+
+    try {
+      const debugRows = labels.map((lab,i)=>({
+        artifact: lab,
+        ioc: iocData[i],
+        yara: yaraData[i],
+        heur: heurData[i]
+      }));
+      console.groupCollapsed('Component chart data (IOC/YARA/Heuristics)');
+      console.table(debugRows);
+      console.groupEnd();
+    } catch(e){}
+
+    const cfg = {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'IOC',
+            data: iocData,
+            borderColor: '#f7c948',
+            backgroundColor: 'rgba(247,201,72,0.06)',
+            tension: 0.2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 2
+          },
+          {
+            label: 'YARA',
+            data: yaraData,
+            borderColor: '#ff6b6b',
+            backgroundColor: 'rgba(255,107,107,0.06)',
+            tension: 0.2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 2
+          },
+          {
+            label: 'Heuristics',
+            data: heurData,
+            borderColor: '#00ff88',
+            backgroundColor: 'rgba(0,255,136,0.06)',
+            tension: 0.2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 2
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        responsive: true,
+        interaction: { mode: 'nearest', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#cfd6da' } },
+          tooltip: {
+            backgroundColor: '#111',
+            titleColor: '#00ff88',
+            bodyColor: '#fff',
+            callbacks: {
+              title: function(tt){
+                const idx = tt[0].dataIndex;
+                return 'Artifact: ' + (labels[idx] || 'unknown');
+              },
+              label: function(item){
+                const meaning = {
+                  'IOC': 'Indicator of Compromise',
+                  'YARA': 'Rule-based match',
+                  'Heuristics': 'Behavior/context scoring'
+                }[item.dataset.label] || '';
+                return item.dataset.label + ': ' + item.formattedValue + '%  ' + (meaning ? '('+meaning+')' : '');
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: '#9aa0a6',
+              autoSkip: true,
+              maxTicksLimit: 18,
+              maxRotation: 45,
+              minRotation: 45,
+              font: { size: 11 }
+            },
+            grid: { color: 'rgba(255,255,255,0.03)' },
+            title: { display: true, text: 'Artifacts (filename)', color: '#9aa0a6' }
+          },
+          y: {
+            min: 0, max: 100,
+            ticks: { color: '#9aa0a6' },
+            grid: { color: 'rgba(255,255,255,0.03)' },
+            title: { display: true, text: 'Component score (%)', color: '#9aa0a6' }
+          }
+        }
+      }
+    };
+
+    try { if(window._componentChart instanceof Chart) window._componentChart.destroy(); } catch(e){}
+    try { window._componentChart = new Chart(el.getContext('2d'), cfg); } catch(e){ console.warn('componentChart init failed', e); }
+  })();
+
+});
+</script>
+
+<script>
+(function(){
+  "use strict";
+
+  const fadeDelay = 5000; // 5 seconds
+
+  // helper for data- attributes
+  const getAttr = (el, key) => el.dataset[key] || el.getAttribute("data-" + key) || null;
+
+  // --- Inline Verify Renderer ---
+  function showVerifyStatus(btn, result){
+    let msg = "";
+    let icon = "";
+    let color = "";
+
+    const okSig = !!result.metadata_hmac_ok;
+    const onDisk = result.on_disk_sha256 || "";
+    const computed = result.computed_sha256 || "";
+
+    const hashMatch = (onDisk && computed && onDisk === computed);
+
+    if(okSig && hashMatch){
+      icon = "✅";
+      msg = "Verified successfully — hash match OK";
+      color = "#00ff88";
+    } else if(okSig && !hashMatch){
+      icon = "⚠️";
+      msg = "Verified but hash mismatch";
+      color = "#ffb74d";
+    } else if(!okSig){
+      icon = "❌";
+      msg = "Metadata tampered — signature invalid";
+      color = "#ff6b6b";
+    } else {
+      icon = "ℹ️";
+      msg = "Verification incomplete";
+      color = "#ccc";
+    }
+
+    let statusEl = btn.parentNode.querySelector(".verify-inline-status");
+    if(!statusEl){
+      statusEl = document.createElement("div");
+      statusEl.className = "verify-inline-status small mt-1";
+      btn.parentNode.appendChild(statusEl);
+    }
+
+    statusEl.style.color = color;
+    statusEl.style.fontWeight = "600";
+    statusEl.innerHTML = `${icon} ${msg}`;
+
+    // fade out after 5s
+    setTimeout(() => {
+      statusEl.style.transition = "opacity 0.8s ease";
+      statusEl.style.opacity = "0";
+      setTimeout(()=>statusEl.remove(),800);
+    }, fadeDelay);
+  }
+
+  // --- CoC Renderer (Modal) ---
+function renderCoC(container, rows){
+  if(!rows || !rows.length){
+    container.innerHTML = "<div class='text-muted small'>No chain of custody records.</div>";
+    return;
+  }
+
+  // Sort newest → oldest
+  rows.sort((a,b) => new Date(b.ts) - new Date(a.ts));
+
+  let html = "<ul class='list-group coc-list-group'>";
+  for(const r of rows){
+    const ts = new Date(r.ts).toLocaleString("en-GB", {
+      day:"2-digit", month:"short", year:"numeric",
+      hour:"2-digit", minute:"2-digit", second:"2-digit",
+      hour12:true, timeZone:"Asia/Kolkata"
+    }).replace(",", "");
+
+    const action = r.action || "—";
+    const actor = r.actor || "unknown";
+    const loc = r.location || "—";
+
+let icon = "ℹ️", actionClass = "coc-action-generic";
+
+if (action.includes("tamper")) { 
+  icon = "❌"; 
+  actionClass = "coc-action-tamper"; 
+}
+else if (action.includes("mismatch")) { 
+  icon = "⚠️"; 
+  actionClass = "coc-action-warning"; 
+}
+else if (action.includes("verify")) { 
+  icon = "🟢"; 
+  actionClass = "coc-action-verify"; 
+}
+else if (action.includes("upload")) { 
+  icon = "📤"; 
+  actionClass = "coc-action-upload"; 
+}
+else if (action.includes("extract")) { 
+  icon = "🧩"; 
+  actionClass = "coc-action-extract"; 
+}
+
+    html += `<li class="list-group-item ${actionClass}">`;
+    html += `<div><strong>${icon} [${action}]</strong> ${actor} at <em>${loc}</em> — ${ts}</div>`;
+
+    if(r.details && typeof r.details === "object"){
+      const d = r.details;
+      const hasExpected = d.expected || d.observed;
+
+      html += `<div class="small ms-3 mt-1">`;
+      if (hasExpected) {
+  const exp = d.expected || "";
+  const obs = d.observed || "";
+  const match = (exp && obs && exp === obs);
+
+let vstatus = "";
+
+// --- Prioritized verification status logic ---
+if (r.action.includes("tamper") || d.tampered === true || d.hmac_ok === false) {
+  vstatus = "❌ Metadata tampered — signature invalid";
+}
+else if (r.action.includes("mismatch")) {
+  vstatus = "⚠️ Hash mismatch — artifact content may differ";
+}
+else if (r.action.includes("corrupt")) {
+  vstatus = "💥 Metadata JSON corrupt — cannot verify signature";
+}
+else if (exp && obs) {
+  if (exp === obs) {
+    vstatus = "✅ Verification successful — hash match confirmed";
+  } else {
+    vstatus = "⚠️ Hash mismatch — artifact content may differ";
+  }
+}
+else if (!exp && !obs && d.hmac_ok) {
+  vstatus = "ℹ️ No file hash available — metadata verified only";
+}
+else {
+  vstatus = "ℹ️ Verification incomplete or unknown";
+}
+
+
+  html += `
+    <div>${vstatus}</div>
+    <div>Expected SHA256: <code>${exp || "—"}</code></div>
+    <div>Observed SHA256: <code>${obs || "—"}</code></div>
+    <div>Match: ${match ? "✅ true" : "❌ false"}</div>
+  `;
+} else {
+  // Handle explicit tampering without hashes
+  if (d.tampered || r.action.includes("tamper") || d.hmac_ok === false) {
+    html += `<div class="text-danger">❌ Metadata tampered — signature invalid</div>`;
+  } else {
+    for (const [k,v] of Object.entries(d)) {
+      html += `<div>${k}: <code>${String(v)}</code></div>`;
+    }
+  }
+}
+
+      html += `</div>`;
+    }
+
+    html += `</li>`;
+  }
+
+  html += "</ul>";
+  container.innerHTML = html;
+}
+
+  // --- Fetch helpers ---
+async function fetchVerify(caseId, artId, btn){
+  try {
+    const resp = await fetch(`/api/coc/verify/${caseId}/${artId}`);
+    const data = await resp.json().catch(()=>({}));
+
+    if (!resp.ok) {
+      console.warn("Verify failed:", resp.status, data);
+      showVerifyStatus(btn, { metadata_hmac_ok:false, _server_msg:data.error || "Verification failed" });
+      return;
+    }
+
+    showVerifyStatus(btn, data);
+  } catch (err) {
+    console.error("verify error", err);
+    showVerifyStatus(btn, { metadata_hmac_ok:false });
+  }
+}
+
+  async function fetchCoC(caseId, artId){
+    try {
+      const resp = await fetch(`/api/coc/${caseId}/${artId}`);
+      const data = await resp.json();
+      const body = document.getElementById("cocModalBody");
+      renderCoC(body, data);
+      new bootstrap.Modal(document.getElementById("cocModal")).show();
+    } catch (err){
+      document.getElementById("cocModalBody").innerHTML = "<div class='text-danger'>Failed to load CoC</div>";
+      new bootstrap.Modal(document.getElementById("cocModal")).show();
+    }
+  }
+
+  // --- Bind buttons ---
+  document.addEventListener("DOMContentLoaded", ()=>{
+    document.querySelectorAll(".verify-btn").forEach(btn=>{
+  if (btn.dataset.verifyBound === "1") return;  // prevent rebinding
+  btn.dataset.verifyBound = "1";
+
+  btn.addEventListener("click", async ()=>{
+    try {
+      btn.disabled = true;
+      btn.classList.add('disabled');
+      btn.textContent = 'Verifying…';
+      await fetchVerify(btn.dataset.case, btn.dataset.art, btn);
+    } finally {
+      setTimeout(()=>{ 
+        btn.disabled=false; 
+        btn.classList.remove('disabled');
+        btn.textContent = '✅ Verify';
+      }, 900);
+    }
+  });
+});
+
+    document.querySelectorAll(".coc-btn").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        fetchCoC(btn.dataset.case, btn.dataset.art);
+      });
+    });
+  });
+})();
+</script>
+
+{% endblock %}

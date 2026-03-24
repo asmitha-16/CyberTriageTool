@@ -1,0 +1,168 @@
+<!-- templates/coc_case.html -->
+{% extends "base.html" %}
+{% block title %}Case Chain-of-Custody — {{ case_id }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0"  style="color: rgb(236, 236, 236) ">Chain of Custody — Case <span class="text" style="color: rgb(236, 236, 236);">{{ case_id }}</span></h2>
+  <div>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('dashboard') }}?case_id={{ case_id }}">Back to Dashboard</a>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-dark table-striped table-sm align-middle">
+    <thead>
+      <tr>
+        <th style="width:6%">ID</th>
+        <th style="width:14%">Timestamp (IST)</th>
+        <th style="width:14%">Artifact ID</th>
+        <th style="width:14%">Filename</th>
+        <th style="width:12%">Actor</th>
+        <th style="width:10%">Action</th>
+        <th style="width:10%">Signature</th>
+      </tr>
+    </thead>
+<tbody>
+{% for e in entries %}
+  {% if e is mapping %}
+    {% set ts_raw = e.get('ts') %}
+    {% set actor = e.get('actor') %}
+    {% set action = e.get('action') %}
+    {% set artifact_id = e.get('artifact_id') or e.get('artifact') %}
+    {% set filename = e.get('filename') %}
+    {% set raw_details = e.get('details') %}
+    {% set sig = e.get('signature') %}
+  {% else %}
+    {% set ts_raw = attribute(e, 'ts') %}
+    {% set actor = attribute(e, 'actor') %}
+    {% set action = attribute(e, 'action') %}
+    {% set artifact_id = attribute(e, 'artifact_id') or attribute(e, 'artifact') %}
+    {% set filename = attribute(e, 'filename') %}
+    {% set raw_details = attribute(e, 'details') %}
+    {% set sig = attribute(e, 'signature') %}
+  {% endif %}
+
+  {# --- Fix missing filename --- #}
+  {% if not filename %}
+  {% if raw_details is mapping %}
+    {% set filename = raw_details.get('original_filename')
+        or raw_details.get('saved_filename')
+        or raw_details.get('original_name')
+        or raw_details.get('filename')
+        or raw_details.get('file')
+        or raw_details.get('target')
+        or raw_details.get('source')
+    %}
+  {% endif %}
+{% endif %}
+
+{# Fallback if still missing #}
+{% if not filename and artifact_id %}
+  {% set filename = artifact_id %}
+{% elif not filename %}
+  {% set filename = '—' %}
+{% endif %}
+
+  {# --- Handle JSON-like details --- #}
+  {% set details_obj = raw_details %}
+  {% if raw_details is string %}
+    {% set trimmed = raw_details|trim %}
+    {% if trimmed.startswith('{') or trimmed.startswith('[') %}
+      {% set details_obj = trimmed | fromjson %}
+    {% endif %}
+  {% endif %}
+
+  {# --- Action display with icons --- #}
+  {% set action_lower = (action|string).lower() if action else '' %}
+  {% if 'hash_mismatch' in action_lower %}
+    {% set action_display = '⚠️ Hash mismatch' %}
+  {% elif 'metadata_tampered' in action_lower or 'tampered' in action_lower %}
+    {% set action_display = '❌ Metadata tampered' %}
+  {% elif 'corrupt' in action_lower or 'json_error' in action_lower %}
+    {% set action_display = '💥 Corrupt JSON' %}
+  {% elif 'verified' in action_lower or 'verify' in action_lower %}
+    {% set action_display = '✅ Verified hash' %}
+  {% else %}
+    {% set action_display = action or '-' %}
+  {% endif %}
+
+  <tr>
+    <td class="small">{{ e.id }}</td>
+
+    <td class="small" style="white-space: normal; word-break: break-word;">
+  {% if ts_raw %}
+    {{ ts_raw | ist_time }}
+  {% else %}
+    -
+  {% endif %}
+</td>
+
+
+    <td class="small" style="font-family:monospace; word-break: break-all; white-space: normal;">
+      {{ artifact_id or '-' }}
+    </td>
+
+    <td class="small" style="word-break: break-all; white-space: normal;">
+  {% if e.get('filename') %}
+    {{ e.get('filename') }}
+  {% elif filename %}
+    {{ filename }}
+  {% elif e.get('artifact_id') %}
+    {{ e.get('artifact_id') }}
+  {% else %}
+    —
+  {% endif %}
+</td>
+
+    <td class="small">{{ actor or '-' }}</td>
+    <td class="small">{{ action_display }}</td>
+
+    <td class="small">
+      {% if sig %}
+        <span class="badge bg-success" title="{{ sig }}" role="img">Signed</span>
+      {% else %}
+        <span class="text-muted">Unsigned</span>
+      {% endif %}
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+  </table>
+</div>
+
+<style>
+/* --- CoC Table Enhancements --- */
+.table td, .table th {
+  vertical-align: top !important;
+  word-break: break-word !important;
+  white-space: normal !important;
+  max-width: 240px;
+}
+
+td.small, th.small {
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+/* Timestamp and Artifact ID wrapping */
+td:nth-child(2), td:nth-child(3) {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Emphasize action icons */
+td:nth-child(6) {
+  font-weight: 600;
+}
+
+/* Ensure <pre> blocks don't overflow */
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+</style>
+
+{# No copy/download UI required per request — kept page JS-free for signature actions #}
+{% endblock %}
